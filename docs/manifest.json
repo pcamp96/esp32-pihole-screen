@@ -1,0 +1,11 @@
+{
+  "name": "ESP32 Pi-hole Screen",
+  "version": "1.0.0",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [{ "path": "firmware/esp32-pihole-screen-s3.bin", "offset": 0 }]
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Pi-hole Screen</title>
+<meta name="description" content="Flash an ESP32-S3 from your browser into a Pi-hole stats screen with a pause button.">
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+  :root {
+    --bg: #f6f5f1;
+    --text: #1d1d1b;
+    --muted: #5d5c57;
+    --line: #dddad2;
+    --panel: #ffffff;
+    --accent: #b3261e;
+    --accent-text: #ffffff;
+    --code-bg: #eeece6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615;
+      --text: #ecebe6;
+      --muted: #a3a29c;
+      --line: #2f2e2b;
+      --panel: #1f1f1d;
+      --accent: #e5534b;
+      --accent-text: #161615;
+      --code-bg: #2a2927;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; font-weight: 600; }
+  h2 { font-size: 1.15rem; margin: 40px 0 8px; font-weight: 600; }
+  p, li { color: var(--text); }
+  .lede { color: var(--muted); margin: 0 0 32px; }
+  .install {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px;
+  }
+  .install p { margin: 0 0 16px; }
+  .install .note { margin: 16px 0 0; font-size: 0.9rem; color: var(--muted); }
+  esp-web-install-button button[slot="activate"] {
+    background: var(--accent);
+    color: var(--accent-text);
+    border: 0;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  esp-web-install-button button[slot="activate"]:hover { filter: brightness(1.08); }
+  esp-web-install-button button[slot="activate"]:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; }
+  code { background: var(--code-bg); padding: 2px 4px; border-radius: 4px; font-size: 0.9em; }
+  ol, ul { padding-left: 1.3em; }
+  li { margin: 4px 0; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: 0; }
+  a { color: var(--accent); }
+  footer { margin-top: 48px; font-size: 0.9rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ESP32 Pi-hole Screen</h1>
+  <p class="lede">Turns an ESP32-S3 into a little screen for Pi-hole v6 stats, with a button that pauses blocking for five minutes.</p>
+
+  <section class="install">
+    <p>Plug the board in over USB and click Install. You'll need Chrome or Edge on a computer.</p>
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate">Install</button>
+      <span slot="unsupported">Your browser can't talk to USB devices. Open this page in Chrome or Edge on a computer.</span>
+      <span slot="not-allowed">This page needs to be opened over HTTPS.</span>
+    </esp-web-install-button>
+    <p class="note">If the board doesn't show up in the list, hold BOOT, tap RST, let go of BOOT, and try again.</p>
+  </section>
+
+  <h2>What you need</h2>
+  <ul>
+    <li>An ESP32-S3 board with 16MB flash and 8MB PSRAM (sold as N16R8)</li>
+    <li>A 128x64 SSD1306 OLED, an I2C LCD1602, or both</li>
+    <li>A push button (optional, but it's the fun part)</li>
+    <li>Pi-hole v6 and an app password from Settings › Web interface / API (turn on Expert mode to see it)</li>
+  </ul>
+
+  <h2>Wiring</h2>
+  <table>
+    <tr><th>Part</th><th>Pin</th><th>ESP32-S3</th></tr>
+    <tr><td>OLED and LCD</td><td>SDA</td><td>GPIO 8</td></tr>
+    <tr><td>OLED and LCD</td><td>SCL (SCK on some OLEDs)</td><td>GPIO 9</td></tr>
+    <tr><td>OLED</td><td>VCC / GND</td><td>3V3 / GND</td></tr>
+    <tr><td>LCD1602</td><td>VCC / GND</td><td>5V / GND</td></tr>
+    <tr><td>Button</td><td>either leg</td><td>GPIO 4, other leg to GND</td></tr>
+  </table>
+
+  <h2>First boot</h2>
+  <ol>
+    <li>On your phone, join the Wi-Fi network <code>PiholeSetup</code>. A setup page opens (or go to <code>192.168.4.1</code>).</li>
+    <li>Pick your home Wi-Fi, then fill in your Pi-hole address (like <code>http://192.168.1.2:8080</code>), the app password, and how long a pause lasts.</li>
+    <li>Save. The board restarts onto your network and starts showing stats.</li>
+  </ol>
+  <p>To change settings later, hold the button while you plug the board in.</p>
+
+  <h2>Status light</h2>
+  <p>The board's RGB LED shows what it's doing, even without a screen attached.</p>
+  <ul>
+    <li><span class="dot" style="background:#2f6fde"></span>Blue: waiting on the setup page</li>
+    <li><span class="dot" style="background:#2e9e4f"></span>Green: Pi-hole is blocking</li>
+    <li><span class="dot" style="background:#e08a1e"></span>Amber: blocking is paused</li>
+    <li><span class="dot" style="background:#c8362d"></span>Red: can't reach Pi-hole or the password is wrong</li>
+  </ul>
+
+  <footer>
+    Source code: <a href="https://github.com/pcamp96/esp32-pihole-screen">github.com/pcamp96/esp32-pihole-screen</a>.
+    Not affiliated with Pi-hole.
+  </footer>
+</main>
+</body>
+</html>
