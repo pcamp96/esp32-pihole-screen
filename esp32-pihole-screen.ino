@@ -114,8 +114,12 @@ bool login() {
   http.end();
 
   JsonDocument doc;
+  if (code == 401) {                  // Pi-hole answered but refused the password
+    st.error = "Wrong password";
+    return false;
+  }
   if (code != 200 || deserializeJson(doc, resp)) {
-    st.error = "Login failed " + String(code);
+    st.error = code < 0 ? "Pi-hole unreachable" : "Login failed " + String(code);
     return false;
   }
   if (!doc["session"]["valid"].as<bool>()) {
@@ -221,13 +225,22 @@ void draw() {
     oled.println("Pi-hole");
     oled.println(st.error.length() ? st.error : "Connecting...");
   } else {
-    oled.setTextSize(2);
-    oled.println(status);
-    oled.setTextSize(1);
+    oled.setTextSize(2);                // 12 px per character: 10 fit on a line
+    if (!st.blocking && st.pauseEndsMs) {
+      // Pause symbol plus the countdown, so "4:32" or "120:00" fits on one line
+      oled.fillRect(0, 1, 4, 13, SSD1306_WHITE);
+      oled.fillRect(7, 1, 4, 13, SSD1306_WHITE);
+      oled.setCursor(18, 0);
+      oled.print(countdown());
+      oled.setCursor(0, 16);
+    } else {
+      oled.println(status);
+    }
+    oled.setTextSize(1);                // 6 px per character: 21 fit on a line
     oled.println();
-    oled.printf("Queries  %s\n", fmtCount(st.total).c_str());
-    oled.printf("Blocked  %s (%.1f%%)\n", fmtCount(st.blocked).c_str(), st.percent);
-    oled.printf("Clients  %ld  List %s\n", st.clients, fmtCount(st.gravity).c_str());
+    oled.printf("Queries %s\n", fmtCount(st.total).c_str());
+    oled.printf("Blocked %s (%.1f%%)\n", fmtCount(st.blocked).c_str(), st.percent);
+    oled.printf("Clients %-3ld List %s\n", st.clients, fmtCount(st.gravity).c_str());
     oled.println(st.lastBlocked.substring(0, 21));
   }
   oled.display();
@@ -258,7 +271,7 @@ void setup() {
   Wire.setTimeOut(20);
 
   for (uint8_t a : {0x3C, 0x3D}) {
-    if (i2cPresent(a) && oled.begin(SSD1306_SWITCHCAPVCC, a)) { haveOled = true; break; }
+    if (i2cPresent(a) && oled.begin(SSD1306_SWITCHCAPVCC, a)) { haveOled = true; oled.setTextWrap(false); break; }
   }
   for (uint8_t a : {0x27, 0x3F}) {
     if (i2cPresent(a)) {
