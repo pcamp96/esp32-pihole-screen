@@ -19,3 +19,7 @@ Libraries: ArduinoJson, Adafruit SSD1306, Adafruit GFX, LiquidCrystal I2C, WiFiM
 The install page in `docs/` uses [ESP Web Tools](https://esphome.github.io/esp-web-tools/) with a manifest generated in the browser. It patches `docs/firmware/esp32-pihole-screen-s3.bin` (a merged image at offset 0). After rebuilding, regenerate that file from the `.merged.bin` build output.
 
 Not affiliated with Pi-hole.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
