@@ -6,10 +6,10 @@
 // Button press while blocking is on  -> pause blocking for PAUSE_SECONDS
 // Button press while paused          -> turn blocking back on now
 //
-// Setup: no passwords in the code. On first boot (or when the button is held
-// while the board starts) it opens a Wi-Fi network called "PiholeSetup".
-// Join it from a phone, pick your Wi-Fi, and enter the Pi-hole address and
-// app password. Settings are saved on the board.
+// Setup: no passwords in the source. The install page writes your Wi-Fi and
+// Pi-hole settings into the BAKED block below before flashing. Without them
+// (or when the button is held while the board starts, or Wi-Fi fails) it opens
+// a Wi-Fi network called "PiholeSetup" with a setup page at 192.168.4.1.
 //
 // Libraries (Arduino IDE > Library Manager):
 //   ArduinoJson (Benoit Blanchon), Adafruit SSD1306, Adafruit GFX Library,
@@ -29,13 +29,43 @@
 String PIHOLE_URL  = "http://pi.hole";   // e.g. http://192.168.1.2:8080, no trailing slash
 String PIHOLE_PASS = "";                 // Pi-hole app password
 int PAUSE_SECONDS  = 300;                // 5 minutes
+String WIFI_SSID, WIFI_PASS;
 Preferences prefs;
+
+// Settings block the install page patches into the firmware image.
+// The layout must match the field sizes in docs/index.html.
+struct BakedConfig {
+  char magic[16];   // "PHSCFG1-ZZZZZZZ" marks the block for the patcher
+  char id[16];      // changes on every patch, so new settings get applied once
+  char ssid[64];
+  char wpass[64];
+  char url[128];
+  char pass[128];
+  char pause[16];
+};
+__attribute__((used)) volatile const BakedConfig BAKED = { "PHSCFG1-ZZZZZZZ", "", "", "", "", "", "" };
+
+String bakedField(const volatile char* p, size_t n) {
+  String s;
+  for (size_t i = 0; i < n && p[i]; i++) s += (char)p[i];
+  return s;
+}
+
+String cleanUrl(String url) {
+  url.trim();
+  while (url.endsWith("/")) url.remove(url.length() - 1);
+  if (url.length() && !url.startsWith("http")) url = "http://" + url;
+  return url;
+}
 
 // Screens are detected at boot: an OLED at 0x3C/0x3D and an LCD1602 at
 // 0x27/0x3F. Whichever answers gets used; a missing one is skipped.
 const int I2C_SDA    = 8;           // ESP32-S3 default I2C pins
 const int I2C_SCL    = 9;
 const int BUTTON_PIN = 4;           // button between GPIO 4 and GND
+// Many low-cost S3 boards have a poorly tuned antenna and work better at lower
+// transmit power. Raise to WIFI_POWER_19_5dBm if your board has a good one.
+const wifi_power_t WIFI_TX_POWER = WIFI_POWER_8_5dBm;
 const int LED_PIN    = 48;          // onboard RGB LED (38 on DevKitC-1 v1.1 boards)
 // -----------------------------------
 
@@ -177,7 +207,7 @@ String countdown() {
 void draw() {
   String status = st.blocking ? "BLOCKING" : (st.pauseEndsMs ? "PAUSED " + countdown() : "OFF");
 
-  if (st.error.startsWith("Join")) led(0, 0, 255);
+  if (st.error.startsWith("Join")) led(0, 0, 255);   // setup network or joining Wi-Fi
   else if (!st.ok)                 led(255, 0, 0);
   else if (st.blocking)            led(0, 255, 0);
   else                             led(255, 120, 0);
@@ -240,43 +270,68 @@ void setup() {
   }
   Serial.printf("OLED %s, LCD %s\n", haveOled ? "found" : "not found", lcd ? "found" : "not found");
 
-  // Load saved settings
   prefs.begin("pihole", false);
+
+  // Settings written in by the install page are copied into storage once
+  String bakedId = bakedField(BAKED.id, sizeof(BAKED.id));
+  String bakedSsid = bakedField(BAKED.ssid, sizeof(BAKED.ssid));
+  if (bakedSsid.length() && bakedId != prefs.getString("bakedId", "")) {
+    prefs.putString("ssid", bakedSsid);
+    prefs.putString("wpass", bakedField(BAKED.wpass, sizeof(BAKED.wpass)));
+    prefs.putString("url", cleanUrl(bakedField(BAKED.url, sizeof(BAKED.url))));
+    prefs.putString("pass", bakedField(BAKED.pass, sizeof(BAKED.pass)));
+    prefs.putInt("pause", max(10, (int)bakedField(BAKED.pause, sizeof(BAKED.pause)).toInt()));
+    prefs.putString("bakedId", bakedId);
+    Serial.println("Applied settings from the install page");
+  }
+
+  WIFI_SSID     = prefs.getString("ssid", "");
+  WIFI_PASS     = prefs.getString("wpass", "");
   PIHOLE_URL    = prefs.getString("url", PIHOLE_URL);
   PIHOLE_PASS   = prefs.getString("pass", PIHOLE_PASS);
   PAUSE_SECONDS = prefs.getInt("pause", PAUSE_SECONDS);
 
-  // Setup page fields
-  WiFiManagerParameter pUrl("url", "Pi-hole address (http://IP:port)", PIHOLE_URL.c_str(), 80);
-  WiFiManagerParameter pPass("pass", "Pi-hole app password", PIHOLE_PASS.c_str(), 80, "type='password'");
-  WiFiManagerParameter pPause("pause", "Pause length (seconds)", String(PAUSE_SECONDS).c_str(), 6);
-  WiFiManager wm;
-  wm.addParameter(&pUrl);
-  wm.addParameter(&pPass);
-  wm.addParameter(&pPause);
-  bool saved = false;
-  wm.setSaveParamsCallback([&saved]() { saved = true; });
-  wm.setSaveConfigCallback([&saved]() { saved = true; });
+  bool needSetup = digitalRead(BUTTON_PIN) == LOW || WIFI_SSID.isEmpty() || PIHOLE_PASS.isEmpty();
 
-  bool forceSetup = digitalRead(BUTTON_PIN) == LOW || PIHOLE_PASS.isEmpty();
-  st.error = forceSetup ? "Join PiholeSetup" : "Joining Wi-Fi";
-  draw();
+  if (!needSetup) {
+    st.error = "Joining " + WIFI_SSID;
+    draw();
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID.c_str(), WIFI_PASS.c_str());
+    WiFi.setTxPower(WIFI_TX_POWER);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) delay(250);
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("Wi-Fi failed; opening setup network");
+      needSetup = true;
+    }
+  }
 
-  bool connected = forceSetup ? wm.startConfigPortal("PiholeSetup")
-                              : wm.autoConnect("PiholeSetup");
-  if (saved) {
-    String url = pUrl.getValue();
-    url.trim();
-    while (url.endsWith("/")) url.remove(url.length() - 1);
-    if (!url.startsWith("http")) url = "http://" + url;
-    PIHOLE_URL = url;
+  if (needSetup) {
+    WiFiManagerParameter pUrl("url", "Pi-hole address (http://IP:port)", PIHOLE_URL.c_str(), 127);
+    WiFiManagerParameter pPass("pass", "Pi-hole app password", PIHOLE_PASS.c_str(), 127, "type='password'");
+    WiFiManagerParameter pPause("pause", "Pause length (seconds)", String(PAUSE_SECONDS).c_str(), 6);
+    WiFiManager wm;
+    wm.addParameter(&pUrl);
+    wm.addParameter(&pPass);
+    wm.addParameter(&pPause);
+    wm.setConfigPortalTimeout(600);       // retry Wi-Fi after 10 minutes
+    wm.setWiFiAPChannel(6);
+    wm.setAPCallback([](WiFiManager*) { WiFi.setTxPower(WIFI_TX_POWER); });
+    st.error = "Join PiholeSetup";
+    draw();
+    WiFi.disconnect(true);
+    delay(100);
+    if (!wm.startConfigPortal("PiholeSetup")) ESP.restart();
+    prefs.putString("ssid", wm.getWiFiSSID());
+    prefs.putString("wpass", wm.getWiFiPass());
+    PIHOLE_URL = cleanUrl(pUrl.getValue());
     PIHOLE_PASS = pPass.getValue();
     PAUSE_SECONDS = max(10, atoi(pPause.getValue()));
     prefs.putString("url", PIHOLE_URL);
     prefs.putString("pass", PIHOLE_PASS);
     prefs.putInt("pause", PAUSE_SECONDS);
   }
-  if (!connected) ESP.restart();
   Serial.print("IP: "); Serial.println(WiFi.localIP());
 
   st.error = "";

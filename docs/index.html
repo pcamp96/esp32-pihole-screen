@@ -70,6 +70,22 @@
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: 0; }
   a { color: var(--accent); }
   footer { margin-top: 48px; font-size: 0.9rem; color: var(--muted); }
+  form { display: grid; gap: 16px; margin: 0 0 24px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+  label { display: grid; gap: 4px; font-size: 0.9rem; font-weight: 500; }
+  label.short { max-width: 240px; }
+  input {
+    font: inherit;
+    font-weight: 400;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  esp-web-install-button button[slot="activate"]:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 </style>
 </head>
 <body>
@@ -78,13 +94,25 @@
   <p class="lede">Turns an ESP32-S3 into a little screen for Pi-hole v6 stats, with a button that pauses blocking for five minutes.</p>
 
   <section class="install">
-    <p>Plug the board in over USB and click Install. You'll need Chrome or Edge on a computer.</p>
-    <esp-web-install-button manifest="manifest.json">
-      <button slot="activate">Install</button>
+    <p>Fill in your settings, plug the board in over USB, and click Install. You'll need Chrome or Edge on a computer.</p>
+    <form id="settings" autocomplete="off">
+      <div class="row">
+        <label>Wi-Fi name<input name="ssid" maxlength="32" required></label>
+        <label>Wi-Fi password<input name="wpass" type="password" maxlength="63"></label>
+      </div>
+      <div class="row">
+        <label>Pi-hole address<input name="url" placeholder="http://192.168.1.2:8080" maxlength="127" required></label>
+        <label>Pi-hole app password<input name="pass" type="password" maxlength="127" required></label>
+      </div>
+      <label class="short">Pause length (minutes)<input name="pause" type="number" min="1" max="1440" value="5" required></label>
+    </form>
+    <esp-web-install-button id="install">
+      <button slot="activate" id="activate" disabled>Install</button>
       <span slot="unsupported">Your browser can't talk to USB devices. Open this page in Chrome or Edge on a computer.</span>
       <span slot="not-allowed">This page needs to be opened over HTTPS.</span>
     </esp-web-install-button>
-    <p class="note">If the board doesn't show up in the list, hold BOOT, tap RST, let go of BOOT, and try again.</p>
+    <p class="note" id="status">Loading firmware…</p>
+    <p class="note">Your settings never leave this browser. They're written into a copy of the firmware here and sent to the board over USB. If the board doesn't show up in the list, hold BOOT, tap RST, let go of BOOT, and try again.</p>
   </section>
 
   <h2>What you need</h2>
@@ -101,17 +129,13 @@
     <tr><td>OLED and LCD</td><td>SDA</td><td>GPIO 8</td></tr>
     <tr><td>OLED and LCD</td><td>SCL (SCK on some OLEDs)</td><td>GPIO 9</td></tr>
     <tr><td>OLED</td><td>VCC / GND</td><td>3V3 / GND</td></tr>
-    <tr><td>LCD1602</td><td>VCC / GND</td><td>5V / GND</td></tr>
+    <tr><td>LCD1602</td><td>VCC / GND</td><td>3V3 / GND (turn the contrast screw on the back if text is faint)</td></tr>
     <tr><td>Button</td><td>either leg</td><td>GPIO 4, other leg to GND</td></tr>
   </table>
 
   <h2>First boot</h2>
-  <ol>
-    <li>On your phone, join the Wi-Fi network <code>PiholeSetup</code>. A setup page opens (or go to <code>192.168.4.1</code>).</li>
-    <li>Pick your home Wi-Fi, then fill in your Pi-hole address (like <code>http://192.168.1.2:8080</code>), the app password, and how long a pause lasts.</li>
-    <li>Save. The board restarts onto your network and starts showing stats.</li>
-  </ol>
-  <p>To change settings later, hold the button while you plug the board in.</p>
+  <p>After installing, the board joins your Wi-Fi and starts showing stats within about 20 seconds. The ESP32 only does 2.4GHz Wi-Fi, so use a network name that has 2.4GHz.</p>
+  <p>If it can't join, it opens its own Wi-Fi network, <code>PiholeSetup</code>. Join that from a phone and a setup page opens (or go to <code>192.168.4.1</code>) where you can fix the settings. You can also hold the button while you plug the board in to get there, or just install again from this page with new settings.</p>
 
   <h2>Status light</h2>
   <p>The board's RGB LED shows what it's doing, even without a screen attached.</p>
@@ -127,5 +151,65 @@
     Not affiliated with Pi-hole.
   </footer>
 </main>
+<script type="module">
+  import { patchFirmware } from "./patch.js";
+
+  const form = document.getElementById("settings");
+  const install = document.getElementById("install");
+  const activate = document.getElementById("activate");
+  const status = document.getElementById("status");
+  let firmware = null;
+  let manifestUrl = null, firmwareUrl = null;
+  let timer = null;
+
+  async function rebuild() {
+    activate.disabled = true;
+    if (!firmware) return;
+    if (!form.checkValidity()) {
+      status.textContent = "Fill in the settings above to enable Install.";
+      return;
+    }
+    const f = new FormData(form);
+    const values = {
+      id: crypto.getRandomValues(new Uint32Array(1))[0].toString(16),
+      ssid: f.get("ssid"),
+      wpass: f.get("wpass"),
+      url: f.get("url").trim(),
+      pass: f.get("pass"),
+      pause: String(Math.round(Number(f.get("pause")) * 60)),
+    };
+    try {
+      const patched = await patchFirmware(firmware, values);
+      if (firmwareUrl) URL.revokeObjectURL(firmwareUrl);
+      if (manifestUrl) URL.revokeObjectURL(manifestUrl);
+      firmwareUrl = URL.createObjectURL(new Blob([patched], { type: "application/octet-stream" }));
+      const manifest = {
+        name: "ESP32 Pi-hole Screen",
+        version: "1.1.0",
+        new_install_prompt_erase: true,
+        new_install_improv_wait_time: 0,
+        builds: [{ chipFamily: "ESP32-S3", parts: [{ path: firmwareUrl, offset: 0 }] }],
+      };
+      manifestUrl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+      install.manifest = manifestUrl;
+      install.setAttribute("manifest", manifestUrl);
+      activate.disabled = false;
+      status.textContent = "Ready to install.";
+    } catch (e) {
+      status.textContent = "Couldn't prepare the firmware: " + e.message;
+    }
+  }
+
+  form.addEventListener("input", () => {
+    clearTimeout(timer);
+    activate.disabled = true;
+    timer = setTimeout(rebuild, 250);
+  });
+
+  fetch("firmware/esp32-pihole-screen-s3.bin")
+    .then((r) => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+    .then((b) => { firmware = new Uint8Array(b); return rebuild(); })
+    .catch((e) => { status.textContent = "Couldn't load the firmware (" + e.message + "). Reload the page to try again."; });
+</script>
 </body>
 </html>
